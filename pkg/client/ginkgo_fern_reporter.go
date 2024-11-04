@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/guidewire/fern-ginkgo-client/pkg/models"
@@ -13,15 +14,34 @@ import (
 	gt "github.com/onsi/ginkgo/v2/types"
 )
 
+var (
+	aggregatedTestRun *models.TestRun
+	mu                sync.Mutex // to handle concurrent access if needed
+)
+
+// InitializeTestRun sets up the test run object before starting the suites.
+func (f *FernApiClient) InitializeTestRun(projectName string) {
+	aggregatedTestRun = &models.TestRun{
+		TestProjectName: projectName,
+		StartTime:       time.Now(),
+		SuiteRuns:       []models.SuiteRun{},
+	}
+}
+
+
 func (f *FernApiClient) Report(testName string, report gt.Report) error {
 
-	var suiteRuns []models.SuiteRun
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Create a SuiteRun for the current suite
 	suiteRun := models.SuiteRun{
 		SuiteName: report.SuiteDescription,
 		StartTime: report.StartTime,
 		EndTime:   report.EndTime,
 	}
 
+	// Gather SpecRuns for this suite
 	var specRuns []models.SpecRun
 	for _, spec := range report.SpecReports {
 		specRun := models.SpecRun{
@@ -30,49 +50,53 @@ func (f *FernApiClient) Report(testName string, report gt.Report) error {
 			Message:         spec.Failure.Message,
 			StartTime:       spec.StartTime,
 			EndTime:         spec.EndTime,
+			Tags:            convertTags(report.SuiteLabels),
 		}
-
-		// Accessing the suite labels
-		labels := report.SuiteLabels
-		// logic to convert suite labels string to []Tag
-		specRun.Tags = convertTags(labels)
 		specRuns = append(specRuns, specRun)
 	}
-
 	suiteRun.SpecRuns = specRuns
-	suiteRuns = append(suiteRuns, suiteRun)
 
-	testRun := models.TestRun{
-		TestProjectName: f.name, // Set this to your project name
-		TestSeed:        uint64(report.SuiteConfig.RandomSeed),
-		StartTime:       report.StartTime,
-		EndTime:         time.Now(), // or report.EndTime if available
-		SuiteRuns:       suiteRuns,
-	}
+	// Append the SuiteRun to the aggregated TestRun
+	aggregatedTestRun.SuiteRuns = append(aggregatedTestRun.SuiteRuns, suiteRun)
 
-	testJson, err := json.Marshal(testRun)
-	if err != nil {
-		panic(err)
-	}
+	return nil
 
-	bodyReader := bytes.NewReader(testJson)
+}
 
-	url, err := url.JoinPath(f.baseURL, "api/testrun")
+// SubmitFinalReport sends the consolidated report after all suites are complete.
+func (f *FernApiClient) SubmitFinalReport() error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Finalize end time for the entire test run
+	aggregatedTestRun.EndTime = time.Now()
+
+	testJson, err := json.Marshal(aggregatedTestRun)
 	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, bodyReader)
+	fmt.Printf("%s", string(testJson))
+
+
+	bodyReader := bytes.NewReader(testJson)
+	reportURL, err := url.JoinPath(f.baseURL, "api/testrun")
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, reportURL, bodyReader)
 	if err != nil {
 		return err
 	}
 
 	req.Header.Add("Content-Type", "application/json")
-	_, err = f.httpClient.Do(req)
+	resp, err := f.httpClient.Do(req)
 	if err != nil {
-		fmt.Printf("client: error making http request: %s\n", err)
+		fmt.Printf("client: error making HTTP request: %s\n", err)
 		return err
 	}
+	defer resp.Body.Close()
 
 	return nil
 }
