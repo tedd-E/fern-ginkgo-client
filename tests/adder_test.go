@@ -1,11 +1,11 @@
 package tests_test
 
 import (
+	fern "github.com/guidewire-oss/fern-ginkgo-client/pkg/client"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-  fern "github.com/guidewire/fern-ginkgo-client/pkg/client"
 
-	. "github.com/guidewire/fern-ginkgo-client/tests"
+	. "github.com/guidewire-oss/fern-ginkgo-client/tests"
 )
 
 var f *fern.FernApiClient
@@ -18,10 +18,9 @@ var _ = BeforeSuite(func() {
 	f.InitializeTestRun("Example Project") // Initializes the aggregated report
 })
 
-
 var _ = Describe("Adder", func() {
 
-		Describe("Add", func() {
+	Describe("Add", func() {
 
 		It("adds two numbers", func() {
 			sum := Add(2, 3)
